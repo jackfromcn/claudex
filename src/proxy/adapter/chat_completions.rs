@@ -31,13 +31,22 @@ impl ProviderAdapter for ChatCompletionsAdapter {
     }
 
     fn apply_auth(&self, builder: RequestBuilder, profile: &ProfileConfig) -> RequestBuilder {
-        if !profile.api_key.is_empty() {
+        // 使用 get_effective_api_key 获取实际 API key（支持 keyring）
+        let api_key = match profile.get_effective_api_key() {
+            Ok(key) => key,
+            Err(e) => {
+                tracing::warn!("failed to get API key: {e}");
+                return builder;
+            }
+        };
+
+        if !api_key.is_empty() {
             if profile.extra_env.contains_key("AZURE_AUTH")
                 || profile.base_url.contains("openai.azure.com")
             {
-                builder.header("api-key", &profile.api_key)
+                builder.header("api-key", &api_key)
             } else {
-                builder.header("Authorization", format!("Bearer {}", profile.api_key))
+                builder.header("Authorization", format!("Bearer {}", api_key))
             }
         } else {
             builder

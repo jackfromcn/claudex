@@ -224,6 +224,28 @@ impl Default for ProfileConfig {
     }
 }
 
+impl ProfileConfig {
+    /// 获取实际使用的 API key。
+    /// 如果 api_key 字段非空，直接返回；
+    /// 如果 api_key 为空但 api_key_keyring 存在，从 keyring 读取。
+    pub fn get_effective_api_key(&self) -> anyhow::Result<String> {
+        if !self.api_key.is_empty() {
+            return Ok(self.api_key.clone());
+        }
+
+        if let Some(ref keyring_name) = self.api_key_keyring {
+            let entry = keyring::Entry::new("claudex", keyring_name)
+                .map_err(|e| anyhow::anyhow!("failed to create keyring entry: {e}"))?;
+            let key = entry
+                .get_password()
+                .map_err(|e| anyhow::anyhow!("failed to read API key from keyring: {e}"))?;
+            return Ok(key);
+        }
+
+        Ok(String::new())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ProviderType {
     DirectAnthropic,

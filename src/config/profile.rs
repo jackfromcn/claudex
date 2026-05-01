@@ -92,15 +92,17 @@ pub async fn test_connectivity(profile: &ProfileConfig) -> Result<u128> {
         }
     };
 
+    // 使用 get_effective_api_key 获取实际 API key（支持 keyring）
+    let api_key = profile.get_effective_api_key()?;
     let mut req = client.get(&url);
-    if !profile.api_key.is_empty() {
+    if !api_key.is_empty() {
         match profile.provider_type {
             ProviderType::DirectAnthropic => {
-                req = req.header("x-api-key", &profile.api_key);
+                req = req.header("x-api-key", &api_key);
                 req = req.header("anthropic-version", "2023-06-01");
             }
             ProviderType::OpenAICompatible | ProviderType::OpenAIResponses => {
-                req = req.header("Authorization", format!("Bearer {}", profile.api_key));
+                req = req.header("Authorization", format!("Bearer {}", api_key));
             }
         }
     }

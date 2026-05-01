@@ -93,6 +93,11 @@ pub async fn start_proxy(config: ClaudexConfig, port_override: Option<u16>) -> R
             "/proxy/{profile}/v1/messages",
             post(handler::handle_messages),
         )
+        // 默认路由：使用默认 profile，支持 cc-switch 等工具直接切换
+        .route(
+            "/v1/messages",
+            post(handler::handle_messages_default),
+        )
         .route("/health", get(|| async { "ok" }))
         .with_state(state);
 

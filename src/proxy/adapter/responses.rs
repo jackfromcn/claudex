@@ -30,8 +30,17 @@ impl ProviderAdapter for ResponsesAdapter {
     }
 
     fn apply_auth(&self, builder: RequestBuilder, profile: &ProfileConfig) -> RequestBuilder {
-        if !profile.api_key.is_empty() {
-            builder.header("Authorization", format!("Bearer {}", profile.api_key))
+        // 使用 get_effective_api_key 获取实际 API key（支持 keyring）
+        let api_key = match profile.get_effective_api_key() {
+            Ok(key) => key,
+            Err(e) => {
+                tracing::warn!("failed to get API key: {e}");
+                return builder;
+            }
+        };
+
+        if !api_key.is_empty() {
+            builder.header("Authorization", format!("Bearer {}", api_key))
         } else {
             builder
         }

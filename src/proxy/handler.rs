@@ -221,6 +221,31 @@ pub async fn handle_messages(
     }
 }
 
+/// Default profile handler for direct /v1/messages access (e.g., cc-switch)
+pub async fn handle_messages_default(
+    State(state): State<Arc<ProxyState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    // Resolve default profile from config
+    let config = state.config.read().await;
+    let default_profile = config
+        .enabled_profiles()
+        .first()
+        .map(|p| p.name.clone())
+        .unwrap_or_else(|| "default".to_string());
+    drop(config);
+
+    // Call handle_messages with the default profile
+    handle_messages(
+        State(state),
+        Path(default_profile),
+        headers,
+        body,
+    )
+    .await
+}
+
 /// Resolve "auto" profile via smart router
 async fn resolve_auto_profile(state: &ProxyState, body: &Value) -> String {
     let config = state.config.read().await;

@@ -28,8 +28,18 @@ impl ProviderAdapter for DirectAnthropicAdapter {
 
     fn apply_auth(&self, builder: RequestBuilder, profile: &ProfileConfig) -> RequestBuilder {
         let mut b = builder.header("anthropic-version", "2023-06-01");
-        if !profile.api_key.is_empty() {
-            b = b.header("x-api-key", &profile.api_key);
+
+        // 使用 get_effective_api_key 获取实际 API key（支持 keyring）
+        let api_key = match profile.get_effective_api_key() {
+            Ok(key) => key,
+            Err(e) => {
+                tracing::warn!("failed to get API key: {e}");
+                return b;
+            }
+        };
+
+        if !api_key.is_empty() {
+            b = b.header("x-api-key", &api_key);
         }
         b
     }
