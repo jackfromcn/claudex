@@ -13,7 +13,7 @@ mod tui;
 mod update;
 mod util;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -27,6 +27,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let mut config = ClaudexConfig::load(cli.config.as_deref())?;
+    let config_path = cli.config.clone();
 
     // `claudex run` 时 proxy 日志只写文件，不污染 Claude Code 终端输出
     let is_run_command = matches!(&cli.command, Some(Commands::Run { .. }));
@@ -74,7 +75,7 @@ async fn main() -> Result<()> {
             // Ensure proxy is running
             if !process::daemon::is_proxy_running()? {
                 tracing::info!("proxy not running, starting in background...");
-                start_proxy_background(&config, None).await?;
+                start_proxy_background(&config, config_path.as_deref(), None, None).await?;
                 // Brief wait for proxy to be ready
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             }
@@ -119,7 +120,7 @@ async fn main() -> Result<()> {
                 daemon: as_daemon,
             } => {
                 if as_daemon {
-                    start_proxy_background(&config, host).await?;
+                    start_proxy_background(&config, config_path.as_deref(), port, host).await?;
                 } else {
                     proxy::start_proxy(config, port, host).await?;
                 }
@@ -234,20 +235,45 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn start_proxy_background(config: &ClaudexConfig, host_override: Option<String>) -> Result<()> {
-    let port = config.proxy_port;
-    let host = host_override.clone().unwrap_or_else(|| config.proxy_host.clone());
+async fn start_proxy_background(
+    config: &ClaudexConfig,
+    config_path: Option<&std::path::Path>,
+    port_override: Option<u16>,
+    host_override: Option<String>,
+) -> Result<()> {
+    let port = port_override.unwrap_or(config.proxy_port);
+    let host = host_override
+        .clone()
+        .unwrap_or_else(|| config.proxy_host.clone());
 
-    // Spawn proxy in a background task
-    let config_clone = config.clone();
-    tokio::spawn(async move {
-        if let Err(e) = proxy::start_proxy(config_clone, None, host_override).await {
-            tracing::error!("proxy failed: {e}");
-        }
-    });
+    let exe = std::env::current_exe().context("failed to resolve current executable")?;
+    let mut cmd = std::process::Command::new(exe);
+    if let Some(path) = config_path {
+        cmd.arg("--config").arg(path);
+    }
+    cmd.arg("proxy").arg("start");
+    if let Some(port) = port_override {
+        cmd.arg("--port").arg(port.to_string());
+    }
+    if let Some(host) = host_override {
+        cmd.arg("--host").arg(host);
+    }
+
+    // Preserve direct loopback routing even when the parent shell has a global proxy.
+    let no_proxy = std::env::var("NO_PROXY")
+        .or_else(|_| std::env::var("no_proxy"))
+        .unwrap_or_else(|_| "127.0.0.1,localhost,::1".to_string());
+    cmd.env("NO_PROXY", &no_proxy)
+        .env("no_proxy", &no_proxy)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    let child = cmd.spawn().context("failed to spawn proxy daemon")?;
+    tracing::info!(pid = child.id(), "spawned proxy daemon");
 
     // Wait for it to be ready
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder().no_proxy().build()?;
     let health_url = format!("http://{host}:{port}/health");
     for _ in 0..20 {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
