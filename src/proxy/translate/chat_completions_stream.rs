@@ -19,22 +19,6 @@ where
     let mut state = StreamState::new(tool_name_map);
 
     let output = async_stream::stream! {
-        // Send message_start
-        let msg_start = format_sse("message_start", &json!({
-            "type": "message_start",
-            "message": {
-                "id": format!("msg_{}", uuid::Uuid::new_v4()),
-                "type": "message",
-                "role": "assistant",
-                "model": "claudex-proxy",
-                "content": [],
-                "stop_reason": null,
-                "stop_sequence": null,
-                "usage": {"input_tokens": 0, "output_tokens": 0}
-            }
-        }));
-        yield Ok(Bytes::from(msg_start));
-
         let mut stream = std::pin::pin!(input);
         let mut buffer = String::new();
 
@@ -49,6 +33,9 @@ where
                         buffer = buffer[pos + 2..].to_string();
 
                         if let Some(events) = state.process_openai_line(&line) {
+                            if let Some(msg_start) = state.ensure_message_start() {
+                                yield Ok(Bytes::from(msg_start));
+                            }
                             for event in events {
                                 yield Ok(Bytes::from(event));
                             }
@@ -64,6 +51,9 @@ where
                         }
 
                         if let Some(events) = state.process_openai_line(&line) {
+                            if let Some(msg_start) = state.ensure_message_start() {
+                                yield Ok(Bytes::from(msg_start));
+                            }
                             for event in events {
                                 yield Ok(Bytes::from(event));
                             }
@@ -78,6 +68,10 @@ where
         }
 
         // Send final events
+        if let Some(msg_start) = state.ensure_message_start() {
+            yield Ok(Bytes::from(msg_start));
+        }
+
         if state.block_started {
             let block_stop = format_sse("content_block_stop", &json!({
                 "type": "content_block_stop",
@@ -89,7 +83,8 @@ where
         let msg_delta = format_sse("message_delta", &json!({
             "type": "message_delta",
             "delta": {"stop_reason": "end_turn", "stop_sequence": null},
-            "usage": {"output_tokens": state.output_tokens}
+            "usage": {"output_tokens": state.output_tokens},
+            "context_management": null
         }));
         yield Ok(Bytes::from(msg_delta));
 
@@ -102,6 +97,8 @@ where
 struct StreamState {
     block_index: usize,
     block_started: bool,
+    message_started: bool,
+    model_name: Option<String>,
     output_tokens: u64,
     current_tool_call: Option<ToolCallState>,
     tool_name_map: ToolNameMap,
@@ -118,10 +115,33 @@ impl StreamState {
         Self {
             block_index: 0,
             block_started: false,
+            message_started: false,
+            model_name: None,
             output_tokens: 0,
             current_tool_call: None,
             tool_name_map,
         }
+    }
+
+    fn ensure_message_start(&mut self) -> Option<String> {
+        if self.message_started {
+            return None;
+        }
+
+        self.message_started = true;
+        Some(format_sse("message_start", &json!({
+            "type": "message_start",
+            "message": {
+                "id": format!("msg_{}", uuid::Uuid::new_v4()),
+                "type": "message",
+                "role": "assistant",
+                "model": self.model_name.as_deref().unwrap_or("claudex-proxy"),
+                "content": [],
+                "stop_reason": null,
+                "stop_sequence": null,
+                "usage": {"input_tokens": 0, "output_tokens": 0}
+            }
+        })))
     }
 
     fn process_openai_line(&mut self, line: &str) -> Option<Vec<String>> {
@@ -132,6 +152,12 @@ impl StreamState {
         }
 
         let parsed: Value = serde_json::from_str(data).ok()?;
+        if self.model_name.is_none() {
+            self.model_name = parsed
+                .get("model")
+                .and_then(|m| m.as_str())
+                .map(str::to_string);
+        }
         let choice = parsed.get("choices")?.as_array()?.first()?;
         let delta = choice.get("delta")?;
 
@@ -158,7 +184,7 @@ impl StreamState {
                         &json!({
                             "type": "content_block_start",
                             "index": self.block_index,
-                            "content_block": {"type": "text", "text": ""}
+                            "content_block": {"type": "text", "text": "", "citations": null}
                         }),
                     );
                     events.push(block_start);
@@ -290,6 +316,7 @@ impl StreamState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::stream;
     use serde_json::json;
 
     #[test]
@@ -305,6 +332,7 @@ mod tests {
         // Should emit content_block_start + content_block_delta
         assert_eq!(events.len(), 2);
         assert!(events[0].contains("content_block_start"));
+        assert!(events[0].contains("\"citations\":null"));
         assert!(events[1].contains("text_delta"));
         assert!(events[1].contains("Hello"));
         assert!(state.block_started);
@@ -467,5 +495,36 @@ mod tests {
         );
         state.process_openai_line(&line2);
         assert_eq!(state.block_index, 1); // incremented after closing text block
+    }
+
+    #[tokio::test]
+    async fn test_translate_sse_stream_uses_upstream_model_in_message_start() {
+        let input = stream::iter(vec![
+            Ok(Bytes::from(format!(
+                "data: {}\n\n",
+                json!({
+                    "model": "performance",
+                    "choices": [{
+                        "delta": {"content": "Hello"}
+                    }]
+                })
+            ))),
+            Ok(Bytes::from("data: [DONE]\n\n")),
+        ]);
+
+        let output = translate_sse_stream(input, std::collections::HashMap::new())
+            .collect::<Vec<_>>()
+            .await;
+
+        let combined = output
+            .into_iter()
+            .map(|chunk| String::from_utf8(chunk.unwrap().to_vec()).unwrap())
+            .collect::<String>();
+
+        assert!(combined.contains("\"model\":\"performance\""));
+        assert!(!combined.contains("\"model\":\"claudex-proxy\""));
+        assert!(combined.contains("\"text\":\"Hello\""));
+        assert!(combined.contains("\"citations\":null"));
+        assert!(combined.contains("\"context_management\":null"));
     }
 }
