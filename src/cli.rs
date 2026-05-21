@@ -246,6 +246,9 @@ pub enum ProxyAction {
         /// Port override
         #[arg(short, long)]
         port: Option<u16>,
+        /// Host override (e.g. "0.0.0.0" for LAN access)
+        #[arg(long)]
+        host: Option<String>,
         /// Run as daemon
         #[arg(short, long)]
         daemon: bool,

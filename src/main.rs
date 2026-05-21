@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
             // Ensure proxy is running
             if !process::daemon::is_proxy_running()? {
                 tracing::info!("proxy not running, starting in background...");
-                start_proxy_background(&config).await?;
+                start_proxy_background(&config, None).await?;
                 // Brief wait for proxy to be ready
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             }
@@ -115,12 +115,13 @@ async fn main() -> Result<()> {
         Some(Commands::Proxy { action }) => match action {
             ProxyAction::Start {
                 port,
+                host,
                 daemon: as_daemon,
             } => {
                 if as_daemon {
-                    start_proxy_background(&config).await?;
+                    start_proxy_background(&config, host).await?;
                 } else {
-                    proxy::start_proxy(config, port).await?;
+                    proxy::start_proxy(config, port, host).await?;
                 }
             }
             ProxyAction::Stop => {
@@ -233,14 +234,14 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn start_proxy_background(config: &ClaudexConfig) -> Result<()> {
+async fn start_proxy_background(config: &ClaudexConfig, host_override: Option<String>) -> Result<()> {
     let port = config.proxy_port;
-    let host = config.proxy_host.clone();
+    let host = host_override.clone().unwrap_or_else(|| config.proxy_host.clone());
 
     // Spawn proxy in a background task
     let config_clone = config.clone();
     tokio::spawn(async move {
-        if let Err(e) = proxy::start_proxy(config_clone, None).await {
+        if let Err(e) = proxy::start_proxy(config_clone, None, host_override).await {
             tracing::error!("proxy failed: {e}");
         }
     });

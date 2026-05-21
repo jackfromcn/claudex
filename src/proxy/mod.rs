@@ -42,9 +42,9 @@ pub fn proxy_log_path() -> Option<std::path::PathBuf> {
     })
 }
 
-pub async fn start_proxy(config: ClaudexConfig, port_override: Option<u16>) -> Result<()> {
+pub async fn start_proxy(config: ClaudexConfig, port_override: Option<u16>, host_override: Option<String>) -> Result<()> {
     let port = port_override.unwrap_or(config.proxy_port);
-    let host = config.proxy_host.clone();
+    let host = host_override.unwrap_or_else(|| config.proxy_host.clone());
 
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300))

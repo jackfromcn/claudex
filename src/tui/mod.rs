@@ -517,7 +517,7 @@ pub async fn run_tui(
                     println!("Starting proxy in background...");
                     let bg_config = config_snapshot.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = crate::proxy::start_proxy(bg_config, None).await {
+                        if let Err(e) = crate::proxy::start_proxy(bg_config, None, None).await {
                             tracing::error!("proxy failed: {e}");
                         }
                     });
@@ -667,7 +667,7 @@ async fn handle_async_actions(app: &mut App) -> Result<()> {
         AsyncAction::StartProxy => {
             let config = app.config.read().await.clone();
             tokio::spawn(async move {
-                if let Err(e) = crate::proxy::start_proxy(config, None).await {
+                if let Err(e) = crate::proxy::start_proxy(config, None, None).await {
                     tracing::error!("proxy failed: {e}");
                 }
             });
