@@ -29,3 +29,8 @@ config.toml
 # Internal docs and scripts (local only)
 /docs/
 scripts/
+
+# Local AI/generated workspace files
+AGENTS.md
+repomix-output.xml
+.claude/skills/
