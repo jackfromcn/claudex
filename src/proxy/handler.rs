@@ -523,8 +523,18 @@ async fn try_forward(
             Ok(response)
         } else {
             let resp_json: Value = resp.json().await?;
-            let anthropic_resp =
-                adapter.translate_response(&resp_json, &translated.tool_name_map)?;
+            let anthropic_resp = match adapter.translate_response(&resp_json, &translated.tool_name_map) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::error!(
+                        profile = %profile.name,
+                        response = %resp_json,
+                        error = %e,
+                        "response translation failed"
+                    );
+                    return Err(e);
+                }
+            };
             extract_and_store_context(state, &profile.name, &anthropic_resp);
             let response = Response::builder()
                 .status(200)

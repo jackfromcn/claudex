@@ -244,6 +244,18 @@ pub fn openai_to_anthropic(openai: &Value, tool_name_map: &ToolNameMap) -> Resul
                 "text": text,
             }));
         }
+    } else if let Some(parts) = message.get("content").and_then(|c| c.as_array()) {
+        let text = parts
+            .iter()
+            .filter_map(extract_openai_text_part)
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !text.is_empty() {
+            content.push(json!({
+                "type": "text",
+                "text": text,
+            }));
+        }
     }
 
     // Tool calls（还原被截断的工具名）
@@ -320,6 +332,20 @@ pub fn openai_to_anthropic(openai: &Value, tool_name_map: &ToolNameMap) -> Resul
     Ok(resp)
 }
 
+fn extract_openai_text_part(part: &Value) -> Option<String> {
+    match part.get("type").and_then(|t| t.as_str()) {
+        Some("text") => part
+            .get("text")
+            .and_then(|t| t.as_str())
+            .map(|s| s.to_string()),
+        Some("output_text") => part
+            .get("text")
+            .and_then(|t| t.as_str())
+            .map(|s| s.to_string()),
+        _ => None,
+    }
+}
+
 fn convert_content_to_openai(content: Option<&Value>) -> Value {
     match content {
         None => json!(""),
@@ -358,6 +384,18 @@ fn convert_content_to_openai(content: Option<&Value>) -> Value {
                 if let Some(text) = openai_parts[0].get("text") {
                     return text.clone();
                 }
+            }
+            if !openai_parts.is_empty()
+                && openai_parts
+                    .iter()
+                    .all(|p| p.get("type").and_then(|t| t.as_str()) == Some("text"))
+            {
+                let text = openai_parts
+                    .iter()
+                    .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                return json!(text);
             }
             json!(openai_parts)
         }
@@ -468,6 +506,21 @@ mod tests {
                 {"type": "text", "text": "Part 2"}
             ],
             "messages": []
+        });
+        let result = a2o(&req, "m");
+        assert_eq!(result["messages"][0]["content"], "Part 1\nPart 2");
+    }
+
+    #[test]
+    fn test_user_text_array_flattens_to_string() {
+        let req = json!({
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Part 1"},
+                    {"type": "text", "text": "Part 2"}
+                ]
+            }]
         });
         let result = a2o(&req, "m");
         assert_eq!(result["messages"][0]["content"], "Part 1\nPart 2");
@@ -744,6 +797,27 @@ mod tests {
         assert_eq!(result["stop_reason"], "end_turn");
         assert_eq!(result["usage"]["input_tokens"], 10);
         assert_eq!(result["usage"]["output_tokens"], 5);
+    }
+
+    #[test]
+    fn test_openai_text_array_response() {
+        let resp = json!({
+            "id": "chatcmpl-array",
+            "model": "gpt-4",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "FINAL_CHAIN_OK"}
+                    ]
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5}
+        });
+        let result = openai_to_anthropic(&resp, &empty_map()).unwrap();
+        assert_eq!(result["content"][0]["type"], "text");
+        assert_eq!(result["content"][0]["text"], "FINAL_CHAIN_OK");
     }
 
     #[test]
